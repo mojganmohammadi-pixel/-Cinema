@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ree_Raa — Cinema Tribute</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #080808;
+      color: #e0d5c0;
+      font-family: Georgia, 'Times New Roman', serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 24px;
+      gap: 20px;
+    }
+
+    .title-bar {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      letter-spacing: 4px;
+      text-transform: uppercase;
+      color: #c9a84c;
+      font-size: 12px;
+    }
+
+    .title-bar::before,
+    .title-bar::after {
+      content: '';
+      width: 50px;
+      height: 1px;
+      background: #c9a84c;
+      opacity: .5;
+    }
+
+    /* Drop zone */
+    #drop-zone {
+      width: 640px;
+      height: 360px;
+      border: 1px dashed #2a2a2a;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      gap: 10px;
+      color: #444;
+      font-size: 13px;
+      transition: border-color .2s, color .2s, background .2s;
+      position: relative;
+    }
+
+    #drop-zone:hover, #drop-zone.over {
+      border-color: #c9a84c;
+      color: #c9a84c;
+      background: rgba(201,168,76,.04);
+    }
+
+    .drop-icon { font-size: 36px; color: #2a2a2a; transition: color .2s; }
+    #drop-zone:hover .drop-icon, #drop-zone.over .drop-icon { color: #c9a84c; }
+
+    #file-input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+
+    /* Canvas wrap */
+    #canvas-wrap { display: none; flex-direction: column; align-items: center; gap: 14px; }
+
+    canvas {
+      display: block;
+      width: 640px;
+      height: 360px;
+      background: #000;
+    }
+
+    /* Controls */
+    .controls { display: flex; gap: 10px; }
+
+    button {
+      background: transparent;
+      border: 1px solid #2a2a2a;
+      color: #c0b898;
+      padding: 7px 18px;
+      font-family: Georgia, serif;
+      font-size: 11px;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: border-color .2s, color .2s;
+    }
+
+    button:hover:not(:disabled) { border-color: #c9a84c; color: #c9a84c; }
+
+    button.gold {
+      background: #c9a84c;
+      border-color: #c9a84c;
+      color: #000;
+      font-weight: 700;
+    }
+
+    button.gold:hover:not(:disabled) { background: #e8c96e; border-color: #e8c96e; }
+    button:disabled { opacity: .3; cursor: default; }
+
+    #status {
+      font-size: 11px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: #555;
+      min-height: 16px;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="title-bar">Cinema Tribute</div>
+
+  <div id="drop-zone">
+    <div class="drop-icon">+</div>
+    <div>Drop a photo here, or click to choose</div>
+    <input type="file" id="file-input" accept="image/*">
+  </div>
+
+  <div id="canvas-wrap">
+    <canvas id="c" width="1280" height="720"></canvas>
+    <div class="controls">
+      <button id="btn-play">&#9654; Play</button>
+      <button id="btn-export" class="gold">&#8595; Export Video</button>
+      <button id="btn-reset">&#8617; New Photo</button>
+    </div>
+    <div id="status"></div>
+  </div>
+
+<script>
+'use strict';
+
+const TOTAL  = 13;   // total seconds
+const FPS    = 30;
+const W      = 1280;
+const H      = 720;
+
+const canvas = document.getElementById('c');
+const ctx    = canvas.getContext('2d');
+
+let photo      = null;
+let isPlaying  = false;
+let isExporting = false;
+let position   = 0;
+let lastTs     = null;
+let rafId      = null;
+
+// Pre-bake a set of grain frames for variety
+const GRAIN_COUNT = 8;
+const grains = [];
+
+function bakeGrains() {
+  for (let g = 0; g < GRAIN_COUNT; g++) {
+    const off = document.createElement('canvas');
+    off.width = W >> 1; off.height = H >> 1;
+    const tc = off.getContext('2d');
+    const id = tc.createImageData(off.width, off.height);
+    for (let i = 0; i < id.data.length; i += 4) {
+      const v = Math.random() * 255 | 0;
+      id.data[i] = id.data[i+1] = id.data[i+2] = v;
+      id.data[i+3] = Math.random() * 28 | 0;
+    }
+    tc.putImageData(id, 0, 0);
+    grains.push(off);
+  }
+}
+
+bakeGrains();
+
+function ease(t) {
+  return t < .5 ? 2*t*t : -1 + (4 - 2*t)*t;
+}
+
+function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
+
+function alpha(t, inStart, inEnd, outStart, outEnd) {
+  if (t < inStart || t > outEnd) return 0;
+  if (t < inEnd)   return clamp((t - inStart)  / (inEnd  - inStart), 0, 1);
+  if (t > outStart) return clamp((outEnd - t)   / (outEnd - outStart), 0, 1);
+  return 1;
+}
+
+function drawFrame(t) {
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, W, H);
+
+  if (!photo) return;
+
+  // ── Ken Burns: slow zoom-in + gentle pan ─────────────────
+  const p    = clamp(t / TOTAL, 0, 1);
+  const zoom = 1 + ease(p) * 0.18;
+  const panX = ease(p) * 0.03 * W;
+  const panY = ease(p) * 0.015 * H;
+
+  const srcW = photo.naturalWidth, srcH = photo.naturalHeight;
+  const scale = Math.max(W / srcW, H / srcH) * zoom;
+  const dw    = srcW * scale, dh = srcH * scale;
+  const dx    = (W - dw) / 2 + panX;
+  const dy    = (H - dh) / 2 + panY;
+
+  // Photo with cinematic grade
+  ctx.save();
+  ctx.filter = 'sepia(55%) contrast(1.08) brightness(0.88) saturate(0.8)';
+  ctx.drawImage(photo, dx, dy, dw, dh);
+  ctx.filter = 'none';
+  ctx.restore();
+
+  // Vignette
+  const vig = ctx.createRadialGradient(W/2, H/2, H * 0.28, W/2, H/2, H * 0.88);
+  vig.addColorStop(0, 'rgba(0,0,0,0)');
+  vig.addColorStop(1, 'rgba(0,0,0,0.75)');
+  ctx.fillStyle = vig;
+  ctx.fillRect(0, 0, W, H);
+
+  // Film grain (cycle through baked frames)
+  const grain = grains[Math.floor(t * FPS * 1.3) % GRAIN_COUNT];
+  ctx.save();
+  ctx.globalAlpha = 0.22;
+  ctx.drawImage(grain, 0, 0, W, H);
+  ctx.restore();
+
+  // ── Film strip bars ───────────────────────────────────────
+  const BAR = 22;
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  ctx.fillRect(0, 0, W, BAR);
+  ctx.fillRect(0, H - BAR, W, BAR);
+
+  const perfW = 28, perfH = 14, perfGap = 56;
+  for (let x = 30; x < W - 30; x += perfGap) {
+    ctx.fillStyle = 'rgba(255,255,255,0.07)';
+    ctx.beginPath();
+    if (ctx.roundRect) {
+      ctx.roundRect(x, 4, perfW, perfH, 3);
+      ctx.roundRect(x, H - 4 - perfH, perfW, perfH, 3);
+    } else {
+      ctx.rect(x, 4, perfW, perfH);
+      ctx.rect(x, H - 4 - perfH, perfW, perfH);
+    }
+    ctx.fill();
+  }
+
+  // ── Title "Ree_Raa" ───────────────────────────────────────
+  const titleA = alpha(t, 1.5, 3.2, 9.5, 11.2);
+  if (titleA > 0) {
+    ctx.save();
+    ctx.globalAlpha = titleA;
+
+    // Horizontal rule
+    ctx.strokeStyle = '#c9a84c';
+    ctx.lineWidth = 1.5;
+    const lineW = 160;
+    ctx.beginPath();
+    ctx.moveTo(W/2 - lineW, H * 0.54);
+    ctx.lineTo(W/2 + lineW, H * 0.54);
+    ctx.stroke();
+
+    // Name
+    ctx.font = 'bold 100px Georgia, serif';
+    ctx.fillStyle = '#f8ecc8';
+    ctx.textAlign  = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.shadowColor = 'rgba(0,0,0,0.95)';
+    ctx.shadowBlur  = 24;
+    ctx.shadowOffsetY = 3;
+
+    // Spaced letters manually for elegance
+    drawSpaced(ctx, 'Ree_Raa', W / 2, H * 0.60, 14);
+
+    // Horizontal rule below
+    ctx.beginPath();
+    ctx.moveTo(W/2 - lineW, H * 0.665);
+    ctx.lineTo(W/2 + lineW, H * 0.665);
+    ctx.stroke();
+
+    ctx.restore();
+  }
+
+  // ── Subtitle ──────────────────────────────────────────────
+  const subA = alpha(t, 3.8, 5.2, 9.5, 11.0);
+  if (subA > 0) {
+    ctx.save();
+    ctx.globalAlpha = subA * 0.88;
+    ctx.font = 'italic 24px Georgia, serif';
+    ctx.fillStyle = '#c9a84c';
+    ctx.textAlign  = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.shadowColor = 'rgba(0,0,0,0.9)';
+    ctx.shadowBlur  = 12;
+    ctx.fillText('A Story Told in Light', W / 2, H * 0.725);
+    ctx.restore();
+  }
+
+  // ── Fade from black (opening) ─────────────────────────────
+  if (t < 1.5) {
+    ctx.fillStyle = `rgba(0,0,0,${1 - t / 1.5})`;
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  // ── Fade to black (closing) ───────────────────────────────
+  if (t > 11.2) {
+    const a = clamp((t - 11.2) / 1.8, 0, 1);
+    ctx.fillStyle = `rgba(0,0,0,${a})`;
+    ctx.fillRect(0, 0, W, H);
+  }
+}
+
+// Helper: draw string with extra letter spacing
+function drawSpaced(ctx, text, cx, cy, spacing) {
+  const chars = [...text];
+  // Measure total width
+  let total = 0;
+  chars.forEach((ch, i) => {
+    total += ctx.measureText(ch).width;
+    if (i < chars.length - 1) total += spacing;
+  });
+
+  let x = cx - total / 2;
+  chars.forEach(ch => {
+    const w = ctx.measureText(ch).width;
+    ctx.fillText(ch, x + w / 2, cy);
+    x += w + spacing;
+  });
+}
+
+// ── Playback ────────────────────────────────────────────────
+
+function tick(ts) {
+  if (lastTs !== null) position += (ts - lastTs) / 1000;
+  lastTs = ts;
+
+  if (position >= TOTAL) {
+    position = TOTAL;
+    drawFrame(position);
+    stopPlay();
+    return;
+  }
+
+  drawFrame(position);
+  rafId = requestAnimationFrame(tick);
+}
+
+function startPlay(from = position) {
+  position  = from;
+  lastTs    = null;
+  isPlaying = true;
+  document.getElementById('btn-play').innerHTML = '&#9646;&#9646; Pause';
+  rafId = requestAnimationFrame(tick);
+}
+
+function stopPlay() {
+  isPlaying = false;
+  cancelAnimationFrame(rafId);
+  document.getElementById('btn-play').innerHTML = '&#9654; Play';
+}
+
+// ── Export ──────────────────────────────────────────────────
+
+async function exportVideo() {
+  if (isExporting) return;
+  if (!window.MediaRecorder) {
+    alert('MediaRecorder is not supported in this browser. Please use Chrome or Firefox.');
+    return;
+  }
+
+  isExporting = true;
+  stopPlay();
+  position = 0;
+  drawFrame(0);
+
+  document.getElementById('btn-export').disabled = true;
+  setStatus('Recording…');
+
+  const stream   = canvas.captureStream(FPS);
+  const mimeType = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm']
+    .find(t => MediaRecorder.isTypeSupported(t)) || 'video/webm';
+
+  const chunks  = [];
+  const rec     = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 8_000_000 });
+
+  rec.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
+
+  rec.onstop = () => {
+    const blob = new Blob(chunks, { type: mimeType });
+    const a    = Object.assign(document.createElement('a'), {
+      href: URL.createObjectURL(blob), download: 'Ree_Raa-tribute.webm',
+    });
+    a.click();
+    URL.revokeObjectURL(a.href);
+
+    isExporting = false;
+    document.getElementById('btn-export').disabled = false;
+    setStatus('Saved!');
+    setTimeout(() => setStatus(''), 3000);
+  };
+
+  rec.start(100);
+
+  // Render through at real-time speed
+  position = 0;
+  await new Promise(resolve => {
+    let last = null;
+    function loop(ts) {
+      if (last !== null) position += (ts - last) / 1000;
+      last = ts;
+      drawFrame(position);
+      if (position >= TOTAL) { resolve(); return; }
+      requestAnimationFrame(loop);
+    }
+    requestAnimationFrame(loop);
+  });
+
+  rec.stop();
+}
+
+function setStatus(msg) {
+  document.getElementById('status').textContent = msg;
+}
+
+// ── Load photo ───────────────────────────────────────────────
+
+function loadPhoto(file) {
+  const url = URL.createObjectURL(file);
+  const img = new Image();
+  img.onload = () => {
+    photo = img;
+    position = 0;
+    document.getElementById('drop-zone').style.display   = 'none';
+    document.getElementById('canvas-wrap').style.display = 'flex';
+    drawFrame(0);
+  };
+  img.onerror = () => alert('Could not load image.');
+  img.src = url;
+}
+
+// ── Events ───────────────────────────────────────────────────
+
+const dropZone  = document.getElementById('drop-zone');
+const fileInput = document.getElementById('file-input');
+
+dropZone.addEventListener('click',    () => fileInput.click());
+dropZone.addEventListener('dragover', e  => { e.preventDefault(); dropZone.classList.add('over'); });
+dropZone.addEventListener('dragleave',    () => dropZone.classList.remove('over'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('over');
+  const f = e.dataTransfer.files[0];
+  if (f?.type.startsWith('image/')) loadPhoto(f);
+});
+
+fileInput.addEventListener('change', e => {
+  if (e.target.files[0]) loadPhoto(e.target.files[0]);
+  fileInput.value = '';
+});
+
+document.getElementById('btn-play').addEventListener('click', () => {
+  if (isPlaying) stopPlay();
+  else {
+    if (position >= TOTAL) position = 0;
+    startPlay();
+  }
+});
+
+document.getElementById('btn-export').addEventListener('click', exportVideo);
+
+document.getElementById('btn-reset').addEventListener('click', () => {
+  stopPlay();
+  photo    = null;
+  position = 0;
+  document.getElementById('canvas-wrap').style.display = 'none';
+  document.getElementById('drop-zone').style.display   = 'flex';
+});
+</script>
+</body>
+</html>
