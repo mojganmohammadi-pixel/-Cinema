@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cinema — Video Creator</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <header id="header">
+      <div class="logo">
+        <span class="logo-mark">▶</span>
+        <span class="logo-text">Cinema</span>
+      </div>
+      <div class="header-controls">
+        <button id="btn-export" class="btn btn-primary">Export Video</button>
+      </div>
+    </header>
+
+    <div id="workspace">
+      <aside id="media-panel">
+        <div class="panel-title">Media Library</div>
+        <div id="upload-zone">
+          <div class="upload-icon">+</div>
+          <div>Drop files or click to upload</div>
+          <input type="file" id="file-input" multiple accept="image/*,video/*">
+        </div>
+        <div id="media-grid"></div>
+      </aside>
+
+      <main id="preview-panel">
+        <div id="canvas-container">
+          <canvas id="preview-canvas"></canvas>
+          <div id="export-overlay" class="hidden">
+            <div class="spinner"></div>
+            <div>Exporting video…</div>
+          </div>
+        </div>
+        <div id="playback-bar">
+          <button id="btn-prev" title="Previous scene">⏮</button>
+          <button id="btn-play" title="Play / Pause">▶</button>
+          <button id="btn-next" title="Next scene">⏭</button>
+          <div id="progress-container">
+            <div id="progress-bar">
+              <div id="progress-fill"></div>
+              <div id="progress-handle"></div>
+            </div>
+          </div>
+          <div id="time-display">0:00 / 0:00</div>
+        </div>
+      </main>
+
+      <aside id="properties-panel">
+        <div class="panel-title">Properties</div>
+        <div id="properties-content">
+          <div class="no-selection">Select a scene to edit</div>
+        </div>
+      </aside>
+    </div>
+
+    <div id="timeline">
+      <div id="timeline-header">
+        <button id="btn-add-scene" class="btn btn-sm">+ Add Scene</button>
+        <div class="timeline-label">Timeline</div>
+      </div>
+      <div id="scenes-track"></div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
